@@ -9,14 +9,15 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/json-iterator/go"
-	"github.com/json-iterator/go/extra"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
+
+	jsoniter "github.com/json-iterator/go"
+	"github.com/json-iterator/go/extra"
 )
 
 var json jsoniter.API
@@ -25,9 +26,6 @@ func init() {
 	extra.RegisterFuzzyDecoders()
 	json = jsoniter.ConfigCompatibleWithStandardLibrary
 }
-
-// 哔咔的网址
-const server = "https://picaapi.picacomic.com/"
 
 // Client
 // 客户端 struct
@@ -38,37 +36,35 @@ type Client struct {
 
 // 设置签名header
 func (client *Client) header(req *http.Request) {
-	// define
-	var apiKey = "C69BAF41DA5ABD1FFEDC6D2FEA56B"
-	var nonce = "b1ab87b4800d4d4590a11701b8551afa"
+	if req == nil || req.URL == nil {
+		return
+	}
 	// header
 	var header = map[string]string{
 		"api-key":           apiKey,
-		"accept":            "application/vnd.picacomic.com.v1+json",
-		"app-channel":       "2",
+		"accept":            accept,
+		"app-channel":       "1",
 		"time":              strconv.FormatInt(time.Now().Unix(), 10),
 		"nonce":             nonce,
 		"signature":         "",
-		"app-version":       "2.2.1.2.3.3",
-		"app-uuid":          "defaultUuid",
-		"app-platform":      "android",
-		"app-build-version": "44",
+		"app-version":       appVersion,
+		"app-uuid":          appUuid,
+		"app-platform":      appPlatform,
+		"app-build-version": appBuildVersion,
 		"Content-Type":      "application/json; charset=UTF-8",
-		"User-Agent":        "okhttp/3.8.1",
+		"User-Agent":        userAgent,
 		"authorization":     client.Token,
-		"image-quality":     "original",
+		"image-quality":     ImageQualityOriginal,
 	}
 	// sign
 	var raw = strings.TrimPrefix(req.URL.RequestURI(), "/") + header["time"] + nonce + req.Method + apiKey
 	raw = strings.ToLower(raw)
-	h := hmac.New(sha256.New, []byte("~d}$Q7$eIni=V)9\\RK/P.RM4;9[7|@/CA}b~OW!3?EV`:<>M7pddUBL5n|0/*Cn"))
+	h := hmac.New(sha256.New, []byte(secretKey))
 	h.Write([]byte(raw))
 	header["signature"] = hex.EncodeToString(h.Sum(nil))
 	// put in req
-	if req != nil {
-		for k, v := range header {
-			req.Header.Set(k, v)
-		}
+	for k, v := range header {
+		req.Header.Set(k, v)
 	}
 }
 
@@ -79,9 +75,9 @@ func (client *Client) bodyRequestToPica(method string, path string, body interfa
 	if body == nil {
 		req, err = http.NewRequest(method, server+path, nil)
 	} else {
-		bodyBuff, err := json.Marshal(body)
-		if err != nil {
-			return nil, err
+		bodyBuff, innerErr := json.Marshal(body)
+		if innerErr != nil {
+			return nil, innerErr
 		}
 		bodyStream := bytes.NewBuffer(bodyBuff)
 		req, err = http.NewRequest(method, server+path, bodyStream)
@@ -126,12 +122,7 @@ func (client *Client) getToPicaWithQuality(path string, quality string) ([]byte,
 
 // responseFromPica 从哔咔接口返回体, 并解析异常信息
 func (client *Client) responseFromPica(req *http.Request) ([]byte, error) {
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	buff, err := ioutil.ReadAll(resp.Body)
+	buff, err := client.rawResponseFromPica(req)
 	if err != nil {
 		return nil, err
 	}
@@ -142,6 +133,20 @@ func (client *Client) responseFromPica(req *http.Request) ([]byte, error) {
 	}
 	if response.Code != 200 {
 		return nil, errors.New(response.Message)
+	}
+	return buff, nil
+}
+
+// rawResponseFromPica 从哔咔接口获取原始返回结果
+func (client *Client) rawResponseFromPica(req *http.Request) ([]byte, error) {
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	buff, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
 	}
 	return buff, nil
 }
@@ -247,7 +252,7 @@ func (client *Client) SearchComics(categories []string, keyword string, sort str
 		"keyword": keyword,
 		"sort":    sort,
 	}
-	if categories != nil && len(categories) > 0 {
+	if len(categories) > 0 {
 		params["categories"] = categories
 	}
 	buff, err := client.postToPica("comics/advanced-search?page="+strconv.Itoa(page), params)
@@ -362,6 +367,20 @@ func (client *Client) ComicPicturePageWithQuality(comicId string, epOrder int, p
 		return nil, err
 	}
 	return &epPageResponse.Data.Pages, nil
+}
+
+// ComicPicture 获取实际的漫画图片
+func (client *Client) ComicPicture(pictureInfo Image) ([]byte, error) {
+	req, err := http.NewRequest("GET", pictureInfo.FileServer+"/static/"+pictureInfo.Path, nil)
+	if err != nil {
+		return nil, err
+	}
+	client.header(req)
+	response, err := client.rawResponseFromPica(req)
+	if err != nil {
+		return nil, err
+	}
+	return response, nil
 }
 
 // SwitchLike (取消)喜欢漫画
@@ -669,14 +688,17 @@ func (client *Client) ResetPassword(email string, questionNo int, answer string)
 }
 
 func (client *Client) InitInfo() (*InitInfo, error) {
-	req, err := http.NewRequest("GET", "http://68.183.234.72/init", nil)
+	req, err := http.NewRequest("GET", initServer, nil)
 	if err != nil {
 		return nil, err
 	}
 	client.header(req)
 	rsp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
 	defer rsp.Body.Close()
-	buff, err := ioutil.ReadAll(rsp.Body)
+	buff, err := io.ReadAll(rsp.Body)
 	if err != nil {
 		return nil, err
 	}

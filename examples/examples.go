@@ -3,13 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"github.com/niuhuan/pica-go"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"time"
+
+	"github.com/ZPC2048/pica-go"
 )
 
 // 异常的说明
@@ -160,7 +161,7 @@ func ExampleSearchComics(client *pica.Client) {
 // ExampleUpdateAvatar (需要登录)
 // 修改头像
 func ExampleUpdateAvatar(client *pica.Client) {
-	buff, err := ioutil.ReadFile("1.jpg")
+	buff, err := os.ReadFile("1.jpg")
 	if err != nil {
 		panic(err)
 	}
