@@ -369,18 +369,17 @@ func (client *Client) ComicPicturePageWithQuality(comicId string, epOrder int, p
 	return &epPageResponse.Data.Pages, nil
 }
 
-// ComicPicture 获取实际的漫画图片
+// ComicPicture 获取实际的漫画图片，不需要login
 func (client *Client) ComicPicture(pictureInfo Image) ([]byte, error) {
-	req, err := http.NewRequest("GET", pictureInfo.FileServer+"/static/"+pictureInfo.Path, nil)
+	resp, err := client.Get(pictureInfo.FileServer + "/static/" + pictureInfo.Path)
 	if err != nil {
 		return nil, err
 	}
-	client.header(req)
-	response, err := client.rawResponseFromPica(req)
+	picture, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
-	return response, nil
+	return picture, nil
 }
 
 // SwitchLike (取消)喜欢漫画
